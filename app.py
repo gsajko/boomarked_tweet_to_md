@@ -8,8 +8,8 @@ from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 
-
 NITTER_URL = "https://nitter.net"
+
 
 def is_nitter_up():
     try:
@@ -19,6 +19,7 @@ def is_nitter_up():
         return False
 
 
+# getting tweet html from nitter
 def getting_source_code(url):
     # Automatically download and install ChromeDriver
     chromedriver_autoinstaller.install()
@@ -47,43 +48,54 @@ def getting_source_code(url):
     return html_content
 
 
-def generate_markdown(html_content, output_folder):
-    # Parse the HTML content
-    soup = BeautifulSoup(html_content, "html.parser")
-
-    # Extract the user handle and tweet ID from the canonical link
+# extracting data from html and converting to md
+def extract_metadata(soup):
+    """Extract metadata such as user handle, tweet ID, etc."""
     canonical_link = soup.find("link", {"rel": "canonical"})["href"]
     canonical_parts = canonical_link.split("/")
     user_handle = canonical_parts[-3]
-    canonical_parts[-1]
+    tweet_id = canonical_parts[-1]
+    return user_handle, tweet_id
 
-    # Extract all timeline-items (tweets) in the thread
+
+def process_tweet_content(timeline_item):
+    """Process an individual tweet's content."""
+    author = timeline_item.find("a", {"class": "fullname"}).text.strip()
+    handle = timeline_item.find("a", {"class": "username"}).text.strip()
+    tweet_date = (
+        timeline_item.find("span", {"class": "tweet-date"})
+        .a["title"]
+        .split("·")[0]
+        .strip()
+    )
+    content_div = timeline_item.find("div", {"class": "tweet-content"})
+    content = content_div.text.strip()
+    return f"""
+{author} ([{handle}](https://twitter.com/{handle[1:]}/)) - {tweet_date}
+
+{content}
+"""
+
+
+def handle_quoted_tweet(soup):
+    """Handle the quoted tweet scenario."""
+    quoted_hyperlink = soup.find("a", {"class": "quote-link"})
+    if quoted_hyperlink:
+        quoted_hyperlink = quoted_hyperlink["href"]
+        q_tweet_id = quoted_hyperlink.split("/")[3].split("#")[0]
+        q_user_handle = quoted_hyperlink.split("/")[1]
+        return f"\n\n![[{q_user_handle} - {q_tweet_id}]]"
+    return ""
+
+
+def generate_markdown(html_content, output_folder):
+    """Generate the markdown content for a given tweet's HTML content."""
+    soup = BeautifulSoup(html_content, "html.parser")
+    user_handle, tweet_id = extract_metadata(soup)
     timeline_items = soup.find_all("div", {"class": "timeline-item"})
 
-    # Determine if it's a thread by checking multiple tweets by the same author
-    tweets_to_include = []
-    for timeline_item in timeline_items:
-        handle = timeline_item.find("a", {"class": "username"}).text.strip()
-        if handle == "@" + user_handle:
-            tweets_to_include.append(timeline_item)
-        else:
-            break
-
-    is_thread = len(tweets_to_include) > 1
-
-    # If it's a thread, set the source to the top tweet's URL
-    if is_thread:
-        source = (
-            tweets_to_include[0].find("span", {"class": "tweet-date"}).find("a")["href"]
-        )
-        source = f"https://twitter.com{source.split({NITTER_URL})[-1]}"
-    else:
-        source = canonical_link.replace(
-            "nitter.net", "twitter.com"
-        )  # Correcting to use twitter instead of nitter
-
     clean_date = {
-        tweets_to_include[0]
+        timeline_items[0]
         .find("span", {"class": "tweet-date"})
         .a["title"]
         .split("·")[0]
@@ -93,43 +105,25 @@ def generate_markdown(html_content, output_folder):
 ---
 author: "{user_handle}"
 handle: "@{user_handle}"
-source: "{source}"
+source: "https://twitter.com/{user_handle}/status/{tweet_id}"
 date: "{clean_date}"
 ---
 """
 
     # Process all tweets in the thread
-    for timeline_item in tweets_to_include:
-        author = timeline_item.find("a", {"class": "fullname"}).text.strip()
-        handle = timeline_item.find("a", {"class": "username"}).text.strip()
-        tweet_date = (
-            timeline_item.find("span", {"class": "tweet-date"})
-            .a["title"]
-            .split("·")[0]
-            .strip()
-        )
-        content_div = timeline_item.find("div", {"class": "tweet-content"})
-        content = content_div.text.strip()
-
-        entire_markdown_content += f"""
-{author} ([{handle}](https://twitter.com/{handle[1:]}/)) - {tweet_date}
-
-{content}
-"""
+    for timeline_item in timeline_items:
+        entire_markdown_content += process_tweet_content(timeline_item)
 
     # Handle quoted tweet
-    quoted_hyperlink = soup.find("a", {"class": "quote-link"})
-    if quoted_hyperlink:
-        quoted_hyperlink = quoted_hyperlink["href"]
-        q_tweet_id = quoted_hyperlink.split("/")[3].split("#")[0]
-        q_user_handle = quoted_hyperlink.split("/")[1]
-        entire_markdown_content += f"\n\n![[{q_user_handle} - {q_tweet_id}]]"
+    entire_markdown_content += handle_quoted_tweet(soup)
 
     # Finally, add the tweet link at the end
-    entire_markdown_content += f"\n\n[Tweet link]({source})"
+    entire_markdown_content += (
+        f"\n\n[Tweet link](https://twitter.com/{user_handle}/status/{tweet_id})"
+    )
 
     # Save the markdown content to a .md file
-    filename = f"{user_handle} - {source.split('/')[-1].split('#')[0]}.md"
+    filename = f"{user_handle} - {tweet_id}.md"
     file_path = f"{output_folder}/{filename}"
     with open(file_path, "w") as file:
         file.write(entire_markdown_content)
@@ -138,6 +132,7 @@ date: "{clean_date}"
     return entire_markdown_content
 
 
+# processing list of tweets
 def process_and_save_tweets(tweets_links, output_dir):
     # Directory to save the markdown files
     output_directory = output_dir
@@ -168,7 +163,9 @@ def process_and_save_tweets(tweets_links, output_dir):
 
         print(f"processing {tweet_link}")
         tweet_html = getting_source_code(tweet_link)
-        markdown_content, quoted_tweet_link = generate_markdown(tweet_html, output_directory)
+        markdown_content, quoted_tweet_link = generate_markdown(
+            tweet_html, output_directory
+        )
 
         # Add the tweet link to the processed tweets set
         processed_tweets.add(tweet_link)
@@ -182,6 +179,7 @@ def process_and_save_tweets(tweets_links, output_dir):
 
 
 # %%
+# processing bookmarks
 with open("all_bookmarks_2023-09-21_16-23-49.txt", "r") as file:
     tweet_urls = file.readlines()
 process_and_save_tweets(tweet_urls, "data/tweets_output/")
