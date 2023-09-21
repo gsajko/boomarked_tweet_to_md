@@ -9,11 +9,13 @@ from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 
 
+NITTER_URL = "https://nitter.net"
+
 def is_nitter_up():
     try:
-        response = requests.get("https://nitter.net", timeout=10)
+        response = requests.get(NITTER_URL, timeout=10)
         return response.status_code == 200
-    except requests.RequestException:
+    except (requests.ConnectionError, requests.Timeout):
         return False
 
 
@@ -27,8 +29,8 @@ def getting_source_code(url):
     chrome_options.add_argument("window-position=-2000,0")
     browser = webdriver.Chrome(options=chrome_options)
     # Navigate to the tweet's URL
-    nitter_url = url.replace("twitter.com", "nitter.net")
-    browser.get(nitter_url)
+    nitter = url.replace("twitter.com", NITTER_URL)
+    browser.get(nitter)
     browser.implicitly_wait(3)
     try:
         while True:
@@ -74,7 +76,7 @@ def generate_markdown(html_content, output_folder):
         source = (
             tweets_to_include[0].find("span", {"class": "tweet-date"}).find("a")["href"]
         )
-        source = f"https://twitter.com{source.split('https://nitter.net')[-1]}"
+        source = f"https://twitter.com{source.split({NITTER_URL})[-1]}"
     else:
         source = canonical_link.replace(
             "nitter.net", "twitter.com"
@@ -136,9 +138,9 @@ date: "{clean_date}"
     return entire_markdown_content
 
 
-def process_and_save_tweets(tweets_links, dir):
+def process_and_save_tweets(tweets_links, output_dir):
     # Directory to save the markdown files
-    output_directory = dir
+    output_directory = output_dir
 
     if not is_nitter_up():
         print("Nitter.net is down. Exiting...")
@@ -149,35 +151,32 @@ def process_and_save_tweets(tweets_links, dir):
         os.makedirs(output_directory)
 
     # Placeholder for additional tweets (quoted tweets) to process
-    additional_tweets = []
+    tweets_queue = list(tweets_links)  # Convert initial tweets to a list (queue)
 
     # Set to keep track of processed tweets to avoid duplicates
     processed_tweets = set()
 
-    # Filtering out links that point to specific media
-
     # Process each tweet link
-    for tweet_link in tweets_links:
+    while tweets_queue:
+        tweet_link = tweets_queue.pop(0)  # Get the first tweet from the queue
+
         if tweet_link in processed_tweets:
             continue  # Skip processing if this tweet link has already been processed
+
         if tweet_link.split("/")[-2] == "photo":
             continue  # Skip processing photo links
+
         print(f"processing {tweet_link}")
         tweet_html = getting_source_code(tweet_link)
-        markdown_content, quoted_tweet_link = generate_markdown(
-            tweet_html, output_directory
-        )
+        markdown_content, quoted_tweet_link = generate_markdown(tweet_html, output_directory)
 
         # Add the tweet link to the processed tweets set
         processed_tweets.add(tweet_link)
         print("done❗️")
-        # If a quoted tweet is present, add its link to the list to be processed
-        if quoted_tweet_link:
-            additional_tweets.append(quoted_tweet_link)
 
-    # If there are additional tweets (quoted tweets), process them
-    if additional_tweets:
-        process_and_save_tweets(additional_tweets)
+        # If a quoted tweet is present, add its link to the queue to be processed
+        if quoted_tweet_link:
+            tweets_queue.append(quoted_tweet_link)
 
     return f"Markdown files saved to {output_directory}"
 
@@ -186,3 +185,5 @@ def process_and_save_tweets(tweets_links, dir):
 with open("all_bookmarks_2023-09-21_16-23-49.txt", "r") as file:
     tweet_urls = file.readlines()
 process_and_save_tweets(tweet_urls, "data/tweets_output/")
+
+# %%
