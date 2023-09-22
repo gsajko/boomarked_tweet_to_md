@@ -35,7 +35,10 @@ def getting_source_code(url):
     browser.implicitly_wait(3)
     try:
         while True:
-            element = browser.find_element(By.XPATH, "//a[@class='more-replies-text']")
+            element = browser.find_element(
+                By.XPATH,
+                "//a[@class='more-replies-text'] and text()='earlier replies']",
+            )
             browser.execute_script("window.scrollTo(0, 0);")
             element.click()
             browser.implicitly_wait(2)
@@ -203,51 +206,26 @@ def process_and_save_tweets(tweets_links, output_dir):
 # processing bookmarks
 
 
-with open("all_bookmarks_2023-09-16_19-40-21.txt", "r") as file:
-    tweet_urls = []
-    for url in file.readlines():
-        url = url.strip()
-        if len(url.split("status")[1].split("/")) > 2:
-            continue
-        tweet_urls.append(url)
+# with open("all_bookmarks_2023-09-16_19-40-21.txt", "r") as file:
+#     tweet_urls = []
+#     for url in file.readlines():
+#         url = url.strip()
+#         if len(url.split("status")[1].split("/")) > 2:
+#             continue
+#         tweet_urls.append(url)
 
-process_and_save_tweets(tweet_urls, "data/tweets_output/")
-
-# %%
-
+# process_and_save_tweets(tweet_urls, "data/tweets_output/")
 
 # %%
-# with webdriver.Chrome() as driver:
-#             driver.get(NITTER_URL)
-#             print(driver.current_url)
-#             print(NITTER_URL)
-#             print(driver.current_url.rstrip('/') == NITTER_URL.rstrip('/'))
-
-# %%
-# with open("all_bookmarks_2023-09-21_16-23-49.txt", "r") as file:
-#     tweet_urls = file.readlines()
-
-# # %%
-# with open("all_bookmarks_2023-09-21_16-23-49.txt", "r") as file:
-#     tweet_urls = [url.strip() for url in file.readlines()]
-# %%
-# url = "https://twitter.com/shakoistsLog/status/1703261285046231362"
-# url = "https://twitter.com/simonw/status/1703875763324457244"
-# TODO gets wrong url for those examples, saves content though
-# url = "https://twitter.com/_abhisivasailam/status/1700890144512020664"
-# url2 = "https://twitter.com/mattshumer_/status/1702373805811769509"
-# url3 = "https://twitter.com/jerryjliu0/status/1702345670563332340"
 
 # q_tweet="https://twitter.com/floydophone/status/1693664234926751991"
-loop_tweet = "https://twitter.com/Teknium1/status/1692962927622426712"
-html_code = getting_source_code(loop_tweet)
+# html_code = getting_source_code(url)
 # %%
 
-markdown_content, quoted_tweet_link = generate_markdown(html_code, "data")
+# markdown_content, quoted_tweet_link = generate_markdown(html_code, "data")
 print(quoted_tweet_link)
 # %%
 is_nitter_up()
 # %%
 # TODO, include ![]() link to photos
 # handle deleted tweets
-# naming convention - should reflect URL, otherwise md link are broken
