@@ -1,18 +1,17 @@
 # %%
 import os
+import time
 
 import chromedriver_autoinstaller
-import requests
 from bs4 import BeautifulSoup
 from selenium import webdriver
-from selenium.webdriver.chrome.options import Options
+from selenium.common.exceptions import WebDriverException
 from selenium.webdriver.common.by import By
 
-# NITTER_URL = "https://nitter.net"
-NITTER_URL = "https://nitter.unixfox.eu"
-
-
-from selenium.common.exceptions import WebDriverException
+NITTER_URL = "https://nitter.net"
+# NITTER_URL = "https://nitter.unixfox.eu"
+MAX_RETRIES = 3
+SLEEP_INTERVAL = 15  # 15 seconds
 
 
 def is_nitter_up():
@@ -20,10 +19,9 @@ def is_nitter_up():
     try:
         with webdriver.Chrome() as driver:
             driver.get(NITTER_URL)
-            return driver.current_url.rstrip('/') == NITTER_URL.rstrip('/')
+            return driver.current_url.rstrip("/") == NITTER_URL.rstrip("/")
     except WebDriverException:
         return False
-
 
 
 # getting tweet html from nitter
@@ -49,17 +47,18 @@ def getting_source_code(url):
     html_content = browser.page_source
     return html_content
 
-def generate_markdown(html_content, output_folder):
+
+def generate_markdown(html_content, output_folder, tweet_link):
     # Parse the HTML content
     soup = BeautifulSoup(html_content, "html.parser")
 
     # Extract the user handle and tweet ID from the canonical link
-    canonical_link = soup.find("link", {"rel": "canonical"})["href"]
-    canonical_parts = canonical_link.split("/")
-    user_handle = canonical_parts[-3]
-    canonical_parts[-1]
-    meta_tag = soup.find('meta', {'property': 'og:title'})
-    name = ' '.join(meta_tag['content'].split(' ')[:-1]) if meta_tag else None
+    og_link = tweet_link
+    og_parts = og_link.split("/")
+    user_handle = og_parts[-3]
+    og_parts[-1]
+    meta_tag = soup.find("meta", {"property": "og:title"})
+    name = " ".join(meta_tag["content"].split(" ")[:-1]) if meta_tag else None
     # Extract all timeline-items (tweets) in the thread
     timeline_items = soup.find_all("div", {"class": "timeline-item"})
 
@@ -72,31 +71,18 @@ def generate_markdown(html_content, output_folder):
         else:
             break
 
-    is_thread = len(tweets_to_include) > 1
-
-    # If it's a thread, set the source to the top tweet's URL
-    if is_thread:
-        source = (
-            tweets_to_include[0].find("span", {"class": "tweet-date"}).find("a")["href"]
-        )
-        source = f"https://twitter.com{source.split(NITTER_URL)[-1]}"
-    else:
-        source = canonical_link.replace(
-            NITTER_URL, "twitter.com"
-        )  # Correcting to use twitter instead of nitter
-
-    clean_date = {
+    clean_date = (
         tweets_to_include[0]
         .find("span", {"class": "tweet-date"})
         .a["title"]
         .split("·")[0]
         .strip()
-    }
+    )
     entire_markdown_content = f"""
 ---
 author: "{name}"
 handle: "@{user_handle}"
-source: "{source}"
+source: "{og_link}"
 date: "{clean_date}"
 ---
 """
@@ -112,6 +98,24 @@ date: "{clean_date}"
             .strip()
         )
         content_div = timeline_item.find("div", {"class": "tweet-content"})
+
+        # Extract all hyperlinks in the content
+        for hyperlink_a in content_div.find_all("a", href=True):
+            hyperlink = hyperlink_a["href"]
+            hyperlink_text = hyperlink_a.text
+
+            # Check if it's a Twitter handle and format accordingly
+            if hyperlink_text.startswith("@"):
+                hyperlink_a.replace_with(
+                    f"[{hyperlink_text}](https://twitter.com/{hyperlink_text[1:]}/)"
+                )
+            elif "/status/" in hyperlink:
+                hyperlink_a.replace_with(
+                    f"[{hyperlink_text}](https://twitter.com/{hyperlink})"
+                )
+            else:
+                hyperlink_a.replace_with(f"[{hyperlink_text}]({hyperlink})")
+
         content = content_div.text.strip()
 
         entire_markdown_content += f"""
@@ -127,12 +131,14 @@ date: "{clean_date}"
         q_tweet_id = quoted_hyperlink.split("/")[3].split("#")[0]
         q_user_handle = quoted_hyperlink.split("/")[1]
         entire_markdown_content += f"\n\n![[{q_user_handle} - {q_tweet_id}]]"
+        if not quoted_hyperlink.startswith("https://"):
+            quoted_hyperlink = "https://twitter.com" + quoted_hyperlink
 
     # Finally, add the tweet link at the end
-    entire_markdown_content += f"\n\n[Tweet link]({source})"
+    entire_markdown_content += f"\n\n[Tweet link]({og_link})"
 
     # Save the markdown content to a .md file
-    filename = f"{user_handle} - {source.split('/')[-1].split('#')[0]}.md"
+    filename = f"{user_handle} - {og_link.split('/')[-1].split('#')[0]}.md"
     file_path = f"{output_folder}/{filename}"
     with open(file_path, "w") as file:
         file.write(entire_markdown_content)
@@ -141,16 +147,22 @@ date: "{clean_date}"
     return entire_markdown_content, quoted_hyperlink
 
 
-
-
-
 # processing list of tweets
 def process_and_save_tweets(tweets_links, output_dir):
     # Directory to save the markdown files
     output_directory = output_dir
 
-    if not is_nitter_up():
-        print(f"{NITTER_URL} is down. Exiting...")
+    retry_count = 0
+
+    while not is_nitter_up() and retry_count < MAX_RETRIES:
+        print(
+            f"{NITTER_URL} appears to be down. Retrying in {SLEEP_INTERVAL} seconds..."
+        )
+        time.sleep(SLEEP_INTERVAL)
+        retry_count += 1
+
+    if retry_count == MAX_RETRIES:
+        print(f"{NITTER_URL} is still down after {MAX_RETRIES} retries. Exiting...")
         return
 
     # Ensure the output directory exists
@@ -170,13 +182,10 @@ def process_and_save_tweets(tweets_links, output_dir):
         if tweet_link in processed_tweets:
             continue  # Skip processing if this tweet link has already been processed
 
-        if tweet_link.split("/")[-2] == "photo":
-            continue  # Skip processing photo links
-
         print(f"processing {tweet_link}")
         tweet_html = getting_source_code(tweet_link)
         markdown_content, quoted_tweet_link = generate_markdown(
-            tweet_html, output_directory
+            tweet_html, output_directory, tweet_link
         )
 
         # Add the tweet link to the processed tweets set
@@ -185,24 +194,35 @@ def process_and_save_tweets(tweets_links, output_dir):
 
         # If a quoted tweet is present, add its link to the queue to be processed
         if quoted_tweet_link:
-            tweets_queue.append(quoted_tweet_link)
+            tweets_queue.insert(0, quoted_tweet_link)
 
     return f"Markdown files saved to {output_directory}"
 
 
-%%
-processing bookmarks
-with open("all_bookmarks_2023-09-21_16-23-49.txt", "r") as file:
-    tweet_urls = [url.strip() for url in file.readlines()]
+# %%
+# processing bookmarks
+
+
+with open("all_bookmarks_2023-09-16_19-40-21.txt", "r") as file:
+    tweet_urls = []
+    for url in file.readlines():
+        url = url.strip()
+        if len(url.split("status")[1].split("/")) > 2:
+            continue
+        tweet_urls.append(url)
+
 process_and_save_tweets(tweet_urls, "data/tweets_output/")
+
+# %%
+
 
 # %%
 # with webdriver.Chrome() as driver:
 #             driver.get(NITTER_URL)
-#             print(driver.current_url) 
+#             print(driver.current_url)
 #             print(NITTER_URL)
 #             print(driver.current_url.rstrip('/') == NITTER_URL.rstrip('/'))
-        
+
 # %%
 # with open("all_bookmarks_2023-09-21_16-23-49.txt", "r") as file:
 #     tweet_urls = file.readlines()
@@ -211,11 +231,23 @@ process_and_save_tweets(tweet_urls, "data/tweets_output/")
 # with open("all_bookmarks_2023-09-21_16-23-49.txt", "r") as file:
 #     tweet_urls = [url.strip() for url in file.readlines()]
 # %%
-url = "https://twitter.com/shakoistsLog/status/1703261285046231362"
-html_code = getting_source_code(url)
+# url = "https://twitter.com/shakoistsLog/status/1703261285046231362"
+# url = "https://twitter.com/simonw/status/1703875763324457244"
+# TODO gets wrong url for those examples, saves content though
+# url = "https://twitter.com/_abhisivasailam/status/1700890144512020664"
+# url2 = "https://twitter.com/mattshumer_/status/1702373805811769509"
+# url3 = "https://twitter.com/jerryjliu0/status/1702345670563332340"
+
+# q_tweet="https://twitter.com/floydophone/status/1693664234926751991"
+loop_tweet = "https://twitter.com/Teknium1/status/1692962927622426712"
+html_code = getting_source_code(loop_tweet)
 # %%
 
-markdown_content, quoted_tweet_link = generate_markdown(
-            html_code, "data"
-        )
+markdown_content, quoted_tweet_link = generate_markdown(html_code, "data")
+print(quoted_tweet_link)
 # %%
+is_nitter_up()
+# %%
+# TODO, include ![]() link to photos
+# handle deleted tweets
+# naming convention - should reflect URL, otherwise md link are broken
