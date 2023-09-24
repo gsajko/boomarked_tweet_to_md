@@ -3,6 +3,7 @@ import os
 import time
 
 import chromedriver_autoinstaller
+import requests
 from bs4 import BeautifulSoup
 from selenium import webdriver
 from selenium.common.exceptions import WebDriverException
@@ -48,10 +49,10 @@ def getting_source_code(url):
     else:
         pass
     html_content = browser.page_source
-    return html_content
+    return html_content, browser
 
 
-def generate_markdown(html_content, output_folder, tweet_link):
+def generate_markdown(html_content, output_folder, tweet_link, browser):
     # Parse the HTML content
     soup = BeautifulSoup(html_content, "html.parser")
 
@@ -62,25 +63,19 @@ def generate_markdown(html_content, output_folder, tweet_link):
     og_parts[-1]
     meta_tag = soup.find("meta", {"property": "og:title"})
     name = " ".join(meta_tag["content"].split(" ")[:-1]) if meta_tag else None
+    tweet_id = og_link.split("/")[-1].split("#")[0]
     # Extract all timeline-items (tweets) in the thread
     timeline_items = soup.find_all("div", {"class": "timeline-item"})
 
     # Determine if it's a thread by checking multiple tweets by the same author
-    tweets_to_include = [timeline_items[0]]
-    for timeline_item in timeline_items[1:]:
-        handle = timeline_item.find("a", {"class": "username"}).text.strip()
-        if handle == "@" + user_handle:
-            tweets_to_include.append(timeline_item)
-        else:
-            break
-
+    first_tweet = timeline_items[0]
     clean_date = (
-        tweets_to_include[0]
-        .find("span", {"class": "tweet-date"})
+        first_tweet.find("span", {"class": "tweet-date"})
         .a["title"]
         .split("·")[0]
         .strip()
     )
+
     entire_markdown_content = f"""
 ---
 author: "{name}"
@@ -89,6 +84,14 @@ source: "{og_link}"
 date: "{clean_date}"
 ---
 """
+
+    tweets_to_include = [first_tweet]
+    for timeline_item in timeline_items[1:]:
+        handle = timeline_item.find("a", {"class": "username"}).text.strip()
+        if handle == "@" + user_handle:
+            tweets_to_include.append(timeline_item)
+        else:
+            break
 
     # Process all tweets in the thread
     for timeline_item in tweets_to_include:
@@ -118,7 +121,6 @@ date: "{clean_date}"
                 )
             else:
                 hyperlink_a.replace_with(f"[{hyperlink_text}]({hyperlink})")
-
         content = content_div.text.strip()
 
         entire_markdown_content += f"""
@@ -126,6 +128,47 @@ date: "{clean_date}"
 
 {content}
 """
+        # Process and download images
+        attachments_div = timeline_item.find("div", {"class": "attachments"})
+        if attachments_div:
+            for index, a_tag in enumerate(
+                attachments_div.find_all("a", href=True), start=1
+            ):
+                image_url = a_tag["href"]
+                image_filename = f"{tweet_id}_{index}.jpg"
+                # Save the image
+                img_download_url = NITTER_URL + image_url
+                print(img_download_url)
+                requests.get(img_download_url, stream=True)
+                # Navigate to the image URL using the browser
+                browser.get(NITTER_URL + image_url)
+
+                # Save the image using browser's page source
+                with open(
+                    f"{output_folder}/tweet_attachments/{image_filename}", "wb"
+                ) as file:
+                    file.write(
+                        browser.find_element(By.TAG_NAME, "img").screenshot_as_png
+                    )
+                # Extract the direct image link using the browser
+                # try:
+                #     img_tag = browser.find_element(By.TAG_NAME, "img")
+                #     direct_image_url = img_tag.get_attribute("src")
+
+                #     # Download the image using requests
+                #     response = requests.get(direct_image_url, stream=True)
+                #     response.raise_for_status()
+                #     with open(image_filename, 'wb') as file:
+                #         for chunk in response.iter_content(chunk_size=8192):
+                #             file.write(chunk)
+
+                # except Exception as e:
+                #     print(f"Failed to download {image_url}. Error: {e}")
+                # Appending the image link to the markdown content
+                entire_markdown_content += (
+                    f"\n\n![[tweet_attachments/{image_filename}]]"
+                )
+        browser.close()
 
     # Handle quoted tweet
     quoted_hyperlink = soup.find("a", {"class": "quote-link"})
@@ -141,7 +184,7 @@ date: "{clean_date}"
     entire_markdown_content += f"\n\n[Tweet link]({og_link})"
 
     # Save the markdown content to a .md file
-    filename = f"{user_handle} - {og_link.split('/')[-1].split('#')[0]}.md"
+    filename = f"{user_handle} - {tweet_id}.md"
     file_path = f"{output_folder}/{filename}"
     with open(file_path, "w") as file:
         file.write(entire_markdown_content)
@@ -154,7 +197,7 @@ date: "{clean_date}"
 def process_and_save_tweets(tweets_links, output_dir):
     # Directory to save the markdown files
     output_directory = output_dir
-
+    attachment_dir = f"{output_dir}/tweet_attachments"
     retry_count = 0
 
     while not is_nitter_up() and retry_count < MAX_RETRIES:
@@ -171,6 +214,8 @@ def process_and_save_tweets(tweets_links, output_dir):
     # Ensure the output directory exists
     if not os.path.exists(output_directory):
         os.makedirs(output_directory)
+    if not os.path.exists(attachment_dir):
+        os.makedirs(attachment_dir)
 
     # Placeholder for additional tweets (quoted tweets) to process
     tweets_queue = list(tweets_links)  # Convert initial tweets to a list (queue)
@@ -186,9 +231,9 @@ def process_and_save_tweets(tweets_links, output_dir):
             continue  # Skip processing if this tweet link has already been processed
 
         print(f"processing {tweet_link}")
-        tweet_html = getting_source_code(tweet_link)
+        tweet_html, browser = getting_source_code(tweet_link)
         markdown_content, quoted_tweet_link = generate_markdown(
-            tweet_html, output_directory, tweet_link
+            tweet_html, output_directory, tweet_link, browser=browser
         )
 
         # Add the tweet link to the processed tweets set
@@ -201,6 +246,12 @@ def process_and_save_tweets(tweets_links, output_dir):
 
     return f"Markdown files saved to {output_directory}"
 
+
+# %%
+
+img_tweet = "https://twitter.com/GokuMohandas/status/1701960178965557284"
+# html_code = getting_source_code(img_tweet)
+process_and_save_tweets([img_tweet], "data/tweets_output/")
 
 # %%
 # processing bookmarks
@@ -216,16 +267,13 @@ def process_and_save_tweets(tweets_links, output_dir):
 
 # process_and_save_tweets(tweet_urls, "data/tweets_output/")
 
-# %%
 
-# q_tweet="https://twitter.com/floydophone/status/1693664234926751991"
-# html_code = getting_source_code(url)
 # %%
 
 # markdown_content, quoted_tweet_link = generate_markdown(html_code, "data")
-print(quoted_tweet_link)
+# print(quoted_tweet_link)
 # %%
 is_nitter_up()
 # %%
-# TODO, include ![]() link to photos
+# TODO
 # handle deleted tweets
