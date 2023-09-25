@@ -3,7 +3,6 @@ import os
 import time
 
 import chromedriver_autoinstaller
-import requests
 from bs4 import BeautifulSoup
 from selenium import webdriver
 from selenium.common.exceptions import WebDriverException
@@ -26,7 +25,7 @@ def is_nitter_up():
 
 
 # getting tweet html from nitter
-def getting_source_code(url):
+def getting_source_code(url, output_folder):
     # Automatically download and install ChromeDriver
     chromedriver_autoinstaller.install()
     browser = webdriver.Chrome()
@@ -46,13 +45,29 @@ def getting_source_code(url):
     except Exception:
         pass
 
+    image_links = browser.find_elements(
+        By.XPATH,
+        """//div[@class="attachments"]
+        //div[@class="attachment image"]
+        /a[@class="still-image"]""",
+    )
+
+    tweet_id = nitter.split("/")[-1].split("#")[0]
+
+    for index, link_element in enumerate(image_links):
+        image_data = link_element.screenshot_as_png
+        with open(
+            f"{output_folder}/tweet_attachments/{tweet_id}_{index}.png", "wb"
+        ) as img_file:
+            img_file.write(image_data)
+
     else:
         pass
     html_content = browser.page_source
-    return html_content, browser
+    return html_content
 
 
-def generate_markdown(html_content, output_folder, tweet_link, browser):
+def generate_markdown(html_content, output_folder, tweet_link):
     # Parse the HTML content
     soup = BeautifulSoup(html_content, "html.parser")
 
@@ -76,8 +91,7 @@ def generate_markdown(html_content, output_folder, tweet_link, browser):
         .strip()
     )
 
-    entire_markdown_content = f"""
----
+    entire_markdown_content = f"""---
 author: "{name}"
 handle: "@{user_handle}"
 source: "{og_link}"
@@ -134,41 +148,11 @@ date: "{clean_date}"
             for index, a_tag in enumerate(
                 attachments_div.find_all("a", href=True), start=1
             ):
-                image_url = a_tag["href"]
-                image_filename = f"{tweet_id}_{index}.jpg"
-                # Save the image
-                img_download_url = NITTER_URL + image_url
-                print(img_download_url)
-                requests.get(img_download_url, stream=True)
-                # Navigate to the image URL using the browser
-                browser.get(NITTER_URL + image_url)
-
-                # Save the image using browser's page source
-                with open(
-                    f"{output_folder}/tweet_attachments/{image_filename}", "wb"
-                ) as file:
-                    file.write(
-                        browser.find_element(By.TAG_NAME, "img").screenshot_as_png
-                    )
-                # Extract the direct image link using the browser
-                # try:
-                #     img_tag = browser.find_element(By.TAG_NAME, "img")
-                #     direct_image_url = img_tag.get_attribute("src")
-
-                #     # Download the image using requests
-                #     response = requests.get(direct_image_url, stream=True)
-                #     response.raise_for_status()
-                #     with open(image_filename, 'wb') as file:
-                #         for chunk in response.iter_content(chunk_size=8192):
-                #             file.write(chunk)
-
-                # except Exception as e:
-                #     print(f"Failed to download {image_url}. Error: {e}")
-                # Appending the image link to the markdown content
+                image_filename = f"{tweet_id}_{index}.png"
+                # add img link
                 entire_markdown_content += (
                     f"\n\n![[tweet_attachments/{image_filename}]]"
                 )
-        browser.close()
 
     # Handle quoted tweet
     quoted_hyperlink = soup.find("a", {"class": "quote-link"})
@@ -231,9 +215,9 @@ def process_and_save_tweets(tweets_links, output_dir):
             continue  # Skip processing if this tweet link has already been processed
 
         print(f"processing {tweet_link}")
-        tweet_html, browser = getting_source_code(tweet_link)
+        tweet_html = getting_source_code(tweet_link, output_directory)
         markdown_content, quoted_tweet_link = generate_markdown(
-            tweet_html, output_directory, tweet_link, browser=browser
+            tweet_html, output_directory, tweet_link
         )
 
         # Add the tweet link to the processed tweets set
@@ -249,15 +233,15 @@ def process_and_save_tweets(tweets_links, output_dir):
 
 # %%
 
-img_tweet = "https://twitter.com/GokuMohandas/status/1701960178965557284"
-# html_code = getting_source_code(img_tweet)
-process_and_save_tweets([img_tweet], "data/tweets_output/")
+# img_tweet = "https://twitter.com/GokuMohandas/status/1701960178965557284"
+# # html_code = getting_source_code(img_tweet)
+# process_and_save_tweets([img_tweet], "data/tweets_output/")
 
 # %%
 # processing bookmarks
 
 
-# with open("all_bookmarks_2023-09-16_19-40-21.txt", "r") as file:
+# with open("all_bookmarks_2023-09-22_08-30-10.txt", "r") as file:
 #     tweet_urls = []
 #     for url in file.readlines():
 #         url = url.strip()
@@ -266,14 +250,22 @@ process_and_save_tweets([img_tweet], "data/tweets_output/")
 #         tweet_urls.append(url)
 
 # process_and_save_tweets(tweet_urls, "data/tweets_output/")
-
-
 # %%
-
-# markdown_content, quoted_tweet_link = generate_markdown(html_code, "data")
-# print(quoted_tweet_link)
+with open("all_bookmarks_2023-09-22_08-30-10.txt", "r") as file:
+    img_urls = set()
+    for url in file.readlines():
+        url = url.strip()
+        if (
+            len(url.split("status")[1].split("/")) > 2
+            and url.split("status")[1].split("/")[-2] == "photo"
+        ):
+            img_urls.add(url.split("/photo")[0])
+img_urls
 # %%
-is_nitter_up()
+urls = ["https://twitter.com/yacineMTB/status/1706296874368446968"]
+process_and_save_tweets(urls, "data/tweets_output/")
 # %%
 # TODO
+# save files using selenium with correct name and in correct folder
+# with multiple tweets it's get index wrong right now
 # handle deleted tweets
