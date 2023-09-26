@@ -1,6 +1,7 @@
 # %%
 import os
 import time
+from datetime import datetime
 
 import chromedriver_autoinstaller
 from bs4 import BeautifulSoup
@@ -8,7 +9,7 @@ from selenium import webdriver
 from selenium.common.exceptions import WebDriverException
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
+from tqdm import tqdm
 
 NITTER_URL = "https://nitter.net"
 # NITTER_URL = "https://nitter.unixfox.eu"
@@ -35,7 +36,10 @@ def getting_source_code(url, output_folder):
     nitter = url.replace("https://twitter.com", NITTER_URL)
     browser.get(nitter)
     wait = WebDriverWait(browser, 10)
-    wait.until(lambda browser: browser.execute_script('return document.readyState') == 'complete')
+    wait.until(
+        lambda browser: browser.execute_script("return document.readyState")
+        == "complete"
+    )
 
     try:
         while True:
@@ -49,38 +53,53 @@ def getting_source_code(url, output_folder):
     except Exception:
         pass
     html_content = browser.page_source
-    canonical_link = browser.find_element(By.CSS_SELECTOR, "link[rel='canonical']").get_attribute("href")
+    soup = BeautifulSoup(html_content, "html.parser")
+    canonical_link = soup.find("link", {"rel": "canonical"})["href"]
     main_tweet_id = canonical_link.split("/")[-1]
 
-    timeline_items = browser.find_elements(By.XPATH, '//div[@class="timeline-item "]')
+    # Extract all timeline items
+    timeline_items = soup.find_all("div", {"class": "timeline-item"})
 
     image_urls = []
 
+    # Iterate over each timeline item to check
+    # if it's the main tweet and extract its images
     for item in timeline_items:
-        # Extract tweet ID for the current timeline item
-        tweet_date_element = item.find_element(By.CLASS_NAME, "tweet-date")
-        tweet_link = tweet_date_element.find_element(By.XPATH, './/a').get_attribute('href')
-        tweet_id = tweet_link.split("/")[-1].split("#")[0]
+        tweet_date_element = item.find("span", {"class": "tweet-date"})
+        if tweet_date_element and tweet_date_element.a:
+            tweet_link = tweet_date_element.a["href"]
+            tweet_id = tweet_link.split("/")[-1].split("#")[0]
+            tweet_link = tweet_date_element.a["href"]
+            tweet_id = tweet_link.split("/")[-1].split("#")[0]
 
-        # If the tweet ID matches the main tweet ID, extract the images
-        if tweet_id == main_tweet_id:
-            attachments_div = item.find_element(By.XPATH, './/div[@class="attachments"]')
-            if attachments_div:
-                image_links = attachments_div.find_elements(By.XPATH, './/div[@class="attachment image"]/a[@class="still-image"]')
-                for link_element in image_links:
-                    image_urls.append(link_element.get_attribute('href'))
-                break  # Exit the loop as we found our main tweet
+            if tweet_id == main_tweet_id:
+                attachments_div = item.find("div", {"class": "attachments"})
+                if attachments_div:
+                    image_links = attachments_div.find_all(
+                        "div", {"class": "attachment image"}
+                    )
+                    for link_element in image_links:
+                        image_urls.append(link_element.a["href"])
 
-    # Now that we have all the image URLs, navigate to each one
-    for index, image_url in enumerate(image_urls):
-        image_filename = f"{tweet_id}_{index}.png"
-        
-        # Navigate to the image URL using the browser
-        browser.get(image_url)
-        time.sleep(3)
-        # Save the image using browser's page source
-        with open(f"{output_folder}/tweet_attachments/{image_filename}", "wb") as file:
-            file.write(browser.find_element(By.TAG_NAME, "img").screenshot_as_png)
+    attachment_dir = f"{output_folder}/tweet_attachments"
+    if not os.path.exists(attachment_dir):
+        os.makedirs(attachment_dir)
+    for idx, image_url in enumerate(image_urls):
+        full_url = (
+            NITTER_URL + image_url
+        )  # Assuming NITTER_URL is a variable with the base URL
+        browser.get(full_url)
+        browser.implicitly_wait(3)
+        # Get the image element on the new page.
+        # This assumes the image is the primary content of the navigated page.
+        img_element = browser.find_element(By.TAG_NAME, "img")
+
+        # Use screenshot_as_png to capture the image
+        img_data = img_element.screenshot_as_png
+
+        # Save the image to a file. Use appropriate naming conventions as needed.
+        with open(f"{attachment_dir}/{main_tweet_id}_{idx}.png", "wb") as img_file:
+            img_file.write(img_data)
 
     return html_content
 
@@ -223,26 +242,37 @@ def process_and_save_tweets(tweets_links, output_dir):
     # Set to keep track of processed tweets to avoid duplicates
     processed_tweets = set()
 
+    # Log file to save problematic tweets and their error messages
     # Process each tweet link
-    while tweets_queue:
-        tweet_link = tweets_queue.pop(0)  # Get the first tweet from the queue
-
+    error_log = []
+    for tweet_link in tqdm(
+        tweets_queue, desc="Processing tweets", unit="tweet"
+    ):  # Wrap the loop with tqdm for a progress bar
         if tweet_link in processed_tweets:
             continue  # Skip processing if this tweet link has already been processed
 
-        print(f"processing {tweet_link}")
-        tweet_html = getting_source_code(tweet_link, output_directory)
-        markdown_content, quoted_tweet_link = generate_markdown(
-            tweet_html, output_directory, tweet_link
-        )
+        try:
+            print(f"processing {tweet_link}")
+            tweet_html = getting_source_code(tweet_link, output_directory)
+            markdown_content, quoted_tweet_link = generate_markdown(
+                tweet_html, output_directory, tweet_link
+            )
 
-        # Add the tweet link to the processed tweets set
-        processed_tweets.add(tweet_link)
-        print("done❗️")
+            # Add the tweet link to the processed tweets set
+            processed_tweets.add(tweet_link)
+            print("done❗️")
 
-        # If a quoted tweet is present, add its link to the queue to be processed
-        if quoted_tweet_link:
-            tweets_queue.insert(0, quoted_tweet_link)
+            # If a quoted tweet is present, add its link to the queue to be processed
+            if quoted_tweet_link:
+                tweets_queue.insert(0, quoted_tweet_link)
+        except Exception as e:
+            error_log.append({"url": tweet_link, "error": str(e)})
+
+    # Save the error log with the current date appended to its name
+    log_filename = f"error_log_{datetime.now().strftime('%Y%m%d')}.txt"
+    with open(log_filename, "w") as f:
+        for entry in error_log:
+            f.write(f"URL: {entry['url']} | Error: {entry['error']}\n")
 
     return f"Markdown files saved to {output_directory}"
 
@@ -277,8 +307,9 @@ with open("all_bookmarks_2023-09-22_08-30-10.txt", "r") as file:
         ):
             img_urls.add(url.split("/photo")[0])
 img_urls
+process_and_save_tweets(img_urls, "data/tweets_output/")
 # %%
-urls = ["https://nitter.net/GokuMohandas/status/1701960178965557284"]
+urls = ["https://twitter.com/jeremyphoward/status/1642726620082606080"]
 out_dir = "data/tweets_output/"
 link = urls[0]
 # process_and_save_tweets(urls, "data/tweets_output/")
@@ -288,5 +319,7 @@ generate_markdown(html_content, out_dir, tweet_link=link)
 # %%
 # TODO
 # save files using selenium with correct name and in correct folder
+# selenium only uses visible html! I should extract data using soup,
+#  then use selenium to scrape
 # with multiple tweets it's get index wrong right now
 # handle deleted tweets
