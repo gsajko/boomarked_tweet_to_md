@@ -7,6 +7,8 @@ from bs4 import BeautifulSoup
 from selenium import webdriver
 from selenium.common.exceptions import WebDriverException
 from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
 
 NITTER_URL = "https://nitter.net"
 # NITTER_URL = "https://nitter.unixfox.eu"
@@ -32,7 +34,9 @@ def getting_source_code(url, output_folder):
     # Navigate to the tweet's URL
     nitter = url.replace("https://twitter.com", NITTER_URL)
     browser.get(nitter)
-    browser.implicitly_wait(3)
+    wait = WebDriverWait(browser, 10)
+    wait.until(lambda browser: browser.execute_script('return document.readyState') == 'complete')
+
     try:
         while True:
             element = browser.find_element(
@@ -44,26 +48,40 @@ def getting_source_code(url, output_folder):
             browser.implicitly_wait(2)
     except Exception:
         pass
-
-    image_links = browser.find_elements(
-        By.XPATH,
-        """//div[@class="attachments"]
-        //div[@class="attachment image"]
-        /a[@class="still-image"]""",
-    )
-
-    tweet_id = nitter.split("/")[-1].split("#")[0]
-
-    for index, link_element in enumerate(image_links):
-        image_data = link_element.screenshot_as_png
-        with open(
-            f"{output_folder}/tweet_attachments/{tweet_id}_{index}.png", "wb"
-        ) as img_file:
-            img_file.write(image_data)
-
-    else:
-        pass
     html_content = browser.page_source
+    canonical_link = browser.find_element(By.CSS_SELECTOR, "link[rel='canonical']").get_attribute("href")
+    main_tweet_id = canonical_link.split("/")[-1]
+
+    timeline_items = browser.find_elements(By.XPATH, '//div[@class="timeline-item "]')
+
+    image_urls = []
+
+    for item in timeline_items:
+        # Extract tweet ID for the current timeline item
+        tweet_date_element = item.find_element(By.CLASS_NAME, "tweet-date")
+        tweet_link = tweet_date_element.find_element(By.XPATH, './/a').get_attribute('href')
+        tweet_id = tweet_link.split("/")[-1].split("#")[0]
+
+        # If the tweet ID matches the main tweet ID, extract the images
+        if tweet_id == main_tweet_id:
+            attachments_div = item.find_element(By.XPATH, './/div[@class="attachments"]')
+            if attachments_div:
+                image_links = attachments_div.find_elements(By.XPATH, './/div[@class="attachment image"]/a[@class="still-image"]')
+                for link_element in image_links:
+                    image_urls.append(link_element.get_attribute('href'))
+                break  # Exit the loop as we found our main tweet
+
+    # Now that we have all the image URLs, navigate to each one
+    for index, image_url in enumerate(image_urls):
+        image_filename = f"{tweet_id}_{index}.png"
+        
+        # Navigate to the image URL using the browser
+        browser.get(image_url)
+        time.sleep(3)
+        # Save the image using browser's page source
+        with open(f"{output_folder}/tweet_attachments/{image_filename}", "wb") as file:
+            file.write(browser.find_element(By.TAG_NAME, "img").screenshot_as_png)
+
     return html_content
 
 
@@ -145,9 +163,7 @@ date: "{clean_date}"
         # Process and download images
         attachments_div = timeline_item.find("div", {"class": "attachments"})
         if attachments_div:
-            for index, a_tag in enumerate(
-                attachments_div.find_all("a", href=True), start=1
-            ):
+            for index, a_tag in enumerate(attachments_div.find_all("a", href=True)):
                 image_filename = f"{tweet_id}_{index}.png"
                 # add img link
                 entire_markdown_content += (
@@ -262,8 +278,13 @@ with open("all_bookmarks_2023-09-22_08-30-10.txt", "r") as file:
             img_urls.add(url.split("/photo")[0])
 img_urls
 # %%
-urls = ["https://twitter.com/yacineMTB/status/1706296874368446968"]
-process_and_save_tweets(urls, "data/tweets_output/")
+urls = ["https://nitter.net/GokuMohandas/status/1701960178965557284"]
+out_dir = "data/tweets_output/"
+link = urls[0]
+# process_and_save_tweets(urls, "data/tweets_output/")
+html_content = getting_source_code(link, out_dir)
+# %%
+generate_markdown(html_content, out_dir, tweet_link=link)
 # %%
 # TODO
 # save files using selenium with correct name and in correct folder
