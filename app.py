@@ -53,55 +53,25 @@ def getting_source_code(url, output_folder):
     except Exception:
         pass
     html_content = browser.page_source
-    soup = BeautifulSoup(html_content, "html.parser")
-    canonical_link = soup.find("link", {"rel": "canonical"})["href"]
-    main_tweet_id = canonical_link.split("/")[-1]
+    BeautifulSoup(html_content, "html.parser")
 
-    # Extract all timeline items
-    timeline_items = soup.find_all("div", {"class": "timeline-item"})
+    return html_content
 
-    image_urls = []
 
-    # Iterate over each timeline item to check
-    # if it's the main tweet and extract its images
-    for item in timeline_items:
-        tweet_date_element = item.find("span", {"class": "tweet-date"})
-        if tweet_date_element and tweet_date_element.a:
-            tweet_link = tweet_date_element.a["href"]
-            tweet_id = tweet_link.split("/")[-1].split("#")[0]
-            tweet_link = tweet_date_element.a["href"]
-            tweet_id = tweet_link.split("/")[-1].split("#")[0]
-
-            if tweet_id == main_tweet_id:
-                attachments_div = item.find("div", {"class": "attachments"})
-                if attachments_div:
-                    image_links = attachments_div.find_all(
-                        "div", {"class": "attachment image"}
-                    )
-                    for link_element in image_links:
-                        image_urls.append(link_element.a["href"])
-
+def save_images_from_urls(tweet_id, image_urls, output_folder, browser, NITTER_URL):
     attachment_dir = f"{output_folder}/tweet_attachments"
     if not os.path.exists(attachment_dir):
         os.makedirs(attachment_dir)
+
     for idx, image_url in enumerate(image_urls):
-        full_url = (
-            NITTER_URL + image_url
-        )  # Assuming NITTER_URL is a variable with the base URL
+        full_url = NITTER_URL + image_url
         browser.get(full_url)
         browser.implicitly_wait(3)
-        # Get the image element on the new page.
-        # This assumes the image is the primary content of the navigated page.
         img_element = browser.find_element(By.TAG_NAME, "img")
-
-        # Use screenshot_as_png to capture the image
         img_data = img_element.screenshot_as_png
 
-        # Save the image to a file. Use appropriate naming conventions as needed.
-        with open(f"{attachment_dir}/{main_tweet_id}_{idx}.png", "wb") as img_file:
+        with open(f"{attachment_dir}/{tweet_id}_{idx}.png", "wb") as img_file:
             img_file.write(img_data)
-
-    return html_content
 
 
 def generate_markdown(html_content, output_folder, tweet_link):
@@ -148,12 +118,9 @@ date: "{clean_date}"
     for timeline_item in tweets_to_include:
         author = timeline_item.find("a", {"class": "fullname"}).text.strip()
         handle = timeline_item.find("a", {"class": "username"}).text.strip()
-        tweet_date = (
-            timeline_item.find("span", {"class": "tweet-date"})
-            .a["title"]
-            .split("·")[0]
-            .strip()
-        )
+        date_class = timeline_item.find("span", {"class": "tweet-date"})
+        tweet_date = date_class.a["title"].split("·")[0].strip()
+        tweet_idx = date_class.a["href"].split("/")[-1].split("#")[0]
         content_div = timeline_item.find("div", {"class": "tweet-content"})
 
         # Extract all hyperlinks in the content
@@ -182,12 +149,23 @@ date: "{clean_date}"
         # Process and download images
         attachments_div = timeline_item.find("div", {"class": "attachments"})
         if attachments_div:
+            # TODO
+            image_urls = []
             for index, a_tag in enumerate(attachments_div.find_all("a", href=True)):
-                image_filename = f"{tweet_id}_{index}.png"
+                image_links = attachments_div.find_all(
+                    "div", {"class": "attachment image"}
+                )
+                for link_element in image_links:
+                    image_urls.append(link_element.a["href"])
+                image_filename = f"{tweet_idx}_{index}.png"
                 # add img link
                 entire_markdown_content += (
                     f"\n\n![[tweet_attachments/{image_filename}]]"
                 )
+            browser = webdriver.Chrome()
+            save_images_from_urls(
+                tweet_idx, image_urls, output_folder, browser, NITTER_URL
+            )
 
     # Handle quoted tweet
     quoted_hyperlink = soup.find("a", {"class": "quote-link"})
@@ -318,8 +296,5 @@ html_content = getting_source_code(link, out_dir)
 generate_markdown(html_content, out_dir, tweet_link=link)
 # %%
 # TODO
-# save files using selenium with correct name and in correct folder
-# selenium only uses visible html! I should extract data using soup,
-#  then use selenium to scrape
-# with multiple tweets it's get index wrong right now
-# handle deleted tweets
+# ensure only main tweet get the image
+# in generate markdown
