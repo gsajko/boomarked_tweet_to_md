@@ -28,7 +28,7 @@ def is_nitter_up():
 
 
 # getting tweet html from nitter
-def getting_source_code(url, output_folder):
+def getting_source_code(url):
     # Automatically download and install ChromeDriver
     chromedriver_autoinstaller.install()
     browser = webdriver.Chrome()
@@ -45,7 +45,7 @@ def getting_source_code(url, output_folder):
         while True:
             element = browser.find_element(
                 By.XPATH,
-                "//a[@class='more-replies-text'] and text()='earlier replies']",
+                "//a[@class='more-replies-text' and text()='earlier replies']",
             )
             browser.execute_script("window.scrollTo(0, 0);")
             element.click()
@@ -108,6 +108,8 @@ date: "{clean_date}"
 
     tweets_to_include = [first_tweet]
     for timeline_item in timeline_items[1:]:
+        if timeline_item.text == "This tweet is unavailable":
+            continue
         handle = timeline_item.find("a", {"class": "username"}).text.strip()
         if handle == "@" + user_handle:
             tweets_to_include.append(timeline_item)
@@ -149,7 +151,6 @@ date: "{clean_date}"
         # Process and download images
         attachments_div = timeline_item.find("div", {"class": "attachments"})
         if attachments_div:
-            # TODO
             image_urls = []
             for index, a_tag in enumerate(attachments_div.find_all("a", href=True)):
                 image_links = attachments_div.find_all(
@@ -167,15 +168,16 @@ date: "{clean_date}"
                 tweet_idx, image_urls, output_folder, browser, NITTER_URL
             )
 
-    # Handle quoted tweet
-    quoted_hyperlink = soup.find("a", {"class": "quote-link"})
-    if quoted_hyperlink:
-        quoted_hyperlink = quoted_hyperlink["href"]
-        q_tweet_id = quoted_hyperlink.split("/")[3].split("#")[0]
-        q_user_handle = quoted_hyperlink.split("/")[1]
-        entire_markdown_content += f"\n\n![[{q_user_handle} - {q_tweet_id}]]"
-        if not quoted_hyperlink.startswith("https://"):
-            quoted_hyperlink = "https://twitter.com" + quoted_hyperlink
+        # Handle quoted tweet
+        quoted_hyperlink = ""
+        quote_div = timeline_item.find("div", {"class": "quote quote-big"})
+        if quote_div:
+            quoted_hyperlink = quote_div.find("a", {"class": "quote-link"})["href"]
+            q_tweet_id = quoted_hyperlink.split("/")[3].split("#")[0]
+            q_user_handle = quoted_hyperlink.split("/")[1]
+            entire_markdown_content += f"\n\n![[{q_user_handle} - {q_tweet_id}]]"
+            if not quoted_hyperlink.startswith("https://"):
+                quoted_hyperlink = "https://twitter.com" + quoted_hyperlink
 
     # Finally, add the tweet link at the end
     entire_markdown_content += f"\n\n[Tweet link]({og_link})"
@@ -220,81 +222,108 @@ def process_and_save_tweets(tweets_links, output_dir):
     # Set to keep track of processed tweets to avoid duplicates
     processed_tweets = set()
 
-    # Log file to save problematic tweets and their error messages
-    # Process each tweet link
+    # Log files to save problematic tweets,
+    # their error messages, and not-processed tweets
     error_log = []
-    for tweet_link in tqdm(
-        tweets_queue, desc="Processing tweets", unit="tweet"
-    ):  # Wrap the loop with tqdm for a progress bar
+    log_filename = f"error_log_{datetime.now().strftime('%Y%m%d')}.txt"
+    not_processed_filename = (
+                f"not_processed_log_{datetime.now().strftime('%Y%m%d')}.txt"
+            )
+    # Process each tweet link
+    for tweet_link in tqdm(tweets_queue, desc="Processing tweets", unit="tweet"):
         if tweet_link in processed_tweets:
             continue  # Skip processing if this tweet link has already been processed
 
         try:
             print(f"processing {tweet_link}")
-            tweet_html = getting_source_code(tweet_link, output_directory)
+            tweet_html = getting_source_code(tweet_link)
             markdown_content, quoted_tweet_link = generate_markdown(
                 tweet_html, output_directory, tweet_link
             )
 
             # Add the tweet link to the processed tweets set
             processed_tweets.add(tweet_link)
-            print("done❗️")
-
             # If a quoted tweet is present, add its link to the queue to be processed
             if quoted_tweet_link:
                 tweets_queue.insert(0, quoted_tweet_link)
+
         except Exception as e:
             error_log.append({"url": tweet_link, "error": str(e)})
+            print(str(e))
+            # Save the error log and not-processed tweets log immediately
+            
+        with open(log_filename, "w") as f:
+            for entry in error_log:
+                f.write(f"URL: {entry['url']} | Error: {entry['error']}\n")
 
-    # Save the error log with the current date appended to its name
-    log_filename = f"error_log_{datetime.now().strftime('%Y%m%d')}.txt"
-    with open(log_filename, "w") as f:
-        for entry in error_log:
-            f.write(f"URL: {entry['url']} | Error: {entry['error']}\n")
-
+            # Log the tweets that are not yet processed
+            
+        with open(not_processed_filename, "w") as f:
+            for tweet in tweets_queue:
+                f.write(f"{tweet}\n")
+        print(len(tweets_queue))
     return f"Markdown files saved to {output_directory}"
+
 
 
 # %%
 
-# img_tweet = "https://twitter.com/GokuMohandas/status/1701960178965557284"
-# # html_code = getting_source_code(img_tweet)
-# process_and_save_tweets([img_tweet], "data/tweets_output/")
+# test_tweet = "https://twitter.com/Teknium1/status/1693202749293478270"
+
+# html_code = getting_source_code(test_tweet)
+
+# generate_markdown(
+#     html_content=html_code, tweet_link=test_tweet, output_folder="data/test"
+# )
 
 # %%
 # processing bookmarks
 
-
-# with open("all_bookmarks_2023-09-22_08-30-10.txt", "r") as file:
-#     tweet_urls = []
-#     for url in file.readlines():
-#         url = url.strip()
-#         if len(url.split("status")[1].split("/")) > 2:
-#             continue
-#         tweet_urls.append(url)
-
-# process_and_save_tweets(tweet_urls, "data/tweets_output/")
-# %%
-with open("all_bookmarks_2023-09-22_08-30-10.txt", "r") as file:
-    img_urls = set()
+# with open("not_processed_log_20230929.txt", "r") as file:
+with open("all_bookmarks_2023-09-29_15-00-00.txt", "r") as file:
+    tweet_urls = []
     for url in file.readlines():
         url = url.strip()
-        if (
-            len(url.split("status")[1].split("/")) > 2
-            and url.split("status")[1].split("/")[-2] == "photo"
-        ):
-            img_urls.add(url.split("/photo")[0])
-img_urls
-process_and_save_tweets(img_urls, "data/tweets_output/")
+        if len(url.split("status")[1].split("/")) > 2:
+            continue
+        tweet_urls.append(url)
+
+
+
+
+process_and_save_tweets(tweet_urls, "data/tweets_output/")
 # %%
-urls = ["https://twitter.com/jeremyphoward/status/1642726620082606080"]
-out_dir = "data/tweets_output/"
-link = urls[0]
-# process_and_save_tweets(urls, "data/tweets_output/")
-html_content = getting_source_code(link, out_dir)
+with open("error_log_20230929.txt", "r") as file:
+    tweet_urls = []
+    for url in file.readlines():
+        url = url.split("URL: ")[1].split("|")[0].strip()
+        tweet_urls.append(url)
+process_and_save_tweets(tweet_urls, "data/tweets_output/")
+
 # %%
-generate_markdown(html_content, out_dir, tweet_link=link)
+# with open("all_bookmarks_2023-09-22_08-30-10.txt", "r") as file:
+#     img_urls = set()
+#     for url in file.readlines():
+#         url = url.strip()
+#         if (
+#             len(url.split("status")[1].split("/")) > 2
+#             and url.split("status")[1].split("/")[-2] == "photo"
+#         ):
+#             img_urls.add(url.split("/photo")[0])
+# img_urls
+# process_and_save_tweets(img_urls, "data/tweets_output/")
+# # %%
+# urls = ["https://twitter.com/jeremyphoward/status/1642726620082606080"]
+# out_dir = "data/tweets_output/"
+# link = urls[0]
+# # process_and_save_tweets(urls, "data/tweets_output/")
+# html_content = getting_source_code(link, out_dir)
+# # %%
+# generate_markdown(html_content, out_dir, tweet_link=link)
 # %%
 # TODO
-# ensure only main tweet get the image
+# ensure only main tweet get the image BUT NOT the quote tweet
+# https://twitter.com/suchenzang/status/1694773240818979278
+# correct processed log
+
 # in generate markdown
