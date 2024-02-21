@@ -7,6 +7,7 @@ import chromedriver_autoinstaller
 from bs4 import BeautifulSoup
 from selenium import webdriver
 from selenium.common.exceptions import WebDriverException
+from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from tqdm import tqdm
@@ -31,7 +32,15 @@ def is_nitter_up():
 def getting_source_code(url):
     # Automatically download and install ChromeDriver
     chromedriver_autoinstaller.install()
-    browser = webdriver.Chrome()
+
+    options = Options()
+    options.add_argument("--ignore-certificate-errors")
+    options.add_argument("--ignore-urlfetcher-cert-requests")
+    options.add_argument("--ignore-certificate-errors-spki-list")
+    options.add_argument("--start-miniimized")
+
+    # Initialize the Chrome webdriver with the options
+    browser = webdriver.Chrome(options=options)
     # Navigate to the tweet's URL
     nitter = url.replace("https://twitter.com", NITTER_URL)
     browser.get(nitter)
@@ -163,7 +172,13 @@ date: "{clean_date}"
                 entire_markdown_content += (
                     f"\n\n![[tweet_attachments/{image_filename}]]"
                 )
-            browser = webdriver.Chrome()
+            options = Options()
+            options.add_argument("--ignore-certificate-errors")
+            options.add_argument("--ignore-urlfetcher-cert-requests")
+            options.add_argument("--ignore-certificate-errors-spki-list")
+            options.add_argument("--start-miniimized")
+
+            browser = webdriver.Chrome(options=options)
             save_images_from_urls(
                 tweet_idx, image_urls, output_folder, browser, NITTER_URL
             )
@@ -227,8 +242,8 @@ def process_and_save_tweets(tweets_links, output_dir):
     error_log = []
     log_filename = f"error_log_{datetime.now().strftime('%Y%m%d')}.txt"
     not_processed_filename = (
-                f"not_processed_log_{datetime.now().strftime('%Y%m%d')}.txt"
-            )
+        f"not_processed_log_{datetime.now().strftime('%Y%m%d')}.txt"
+    )
     # Process each tweet link
     for tweet_link in tqdm(tweets_queue, desc="Processing tweets", unit="tweet"):
         if tweet_link in processed_tweets:
@@ -251,19 +266,50 @@ def process_and_save_tweets(tweets_links, output_dir):
             error_log.append({"url": tweet_link, "error": str(e)})
             print(str(e))
             # Save the error log and not-processed tweets log immediately
-            
+
         with open(log_filename, "w") as f:
             for entry in error_log:
                 f.write(f"URL: {entry['url']} | Error: {entry['error']}\n")
 
             # Log the tweets that are not yet processed
-            
+
         with open(not_processed_filename, "w") as f:
             for tweet in tweets_queue:
                 f.write(f"{tweet}\n")
         print(len(tweets_queue))
     return f"Markdown files saved to {output_directory}"
 
+
+def find_linked_tweets(tweet_id):
+    options = Options()
+    options.add_argument("--ignore-certificate-errors")
+    options.add_argument("--ignore-urlfetcher-cert-requests")
+    options.add_argument("--ignore-certificate-errors-spki-list")
+    options.add_argument("--start-miniimized")
+    driver = webdriver.Chrome(
+        options=options
+    )  # or webdriver.Chrome(), depending on your browser
+    base_url = NITTER_URL + "/i/web/status/" + tweet_id
+
+    driver.get(base_url)
+    wait = WebDriverWait(driver, 10)
+    wait.until(
+        lambda driver: driver.execute_script("return document.readyState") == "complete"
+    )
+
+    status_links = driver.find_elements(By.XPATH, '//a[contains(@href, "/status/")]')
+    linked_tweets = []
+    for link in status_links:
+        link_href = link.get_attribute("href")
+        if "/i/status" in link_href:
+            continue
+        if tweet_id in link_href:
+            linked_tweets.append(link_href)
+            print(f"linked tweet found: {link_href}")
+            break
+
+    driver.close()
+    return linked_tweets
 
 
 # %%
@@ -278,26 +324,99 @@ def process_and_save_tweets(tweets_links, output_dir):
 
 # %%
 # processing bookmarks
-
-# with open("not_processed_log_20230929.txt", "r") as file:
-with open("all_bookmarks_2023-09-29_15-00-00.txt", "r") as file:
-    tweet_urls = []
-    for url in file.readlines():
-        url = url.strip()
-        if len(url.split("status")[1].split("/")) > 2:
-            continue
-        tweet_urls.append(url)
-
-
-
-
-process_and_save_tweets(tweet_urls, "data/tweets_output/")
 # %%
-with open("error_log_20230929.txt", "r") as file:
+# with open("not_processed_log_20230929.txt", "r") as file:
+import glob
+import os
+
+tweet_idxs = []
+for tweet_md in glob.glob(os.path.join("data/tweets_output", "*.md")):
+    tweet_idxs.append(tweet_md.split(" - ")[1].split(".")[0])
+tweet_idxs[0]
+# %%
+quoted_links = []
+# Define a regular expression pattern to match the Obsidian link
+pattern = r"!\[\[(.*?)\]\]"
+import re
+
+# Search for the pattern in the markdown text
+for tweet_md in glob.glob(os.path.join("data/tweets_output", "*.md")):
+    with open(tweet_md, "r") as f:
+        markdown_text = f.read()
+    match = re.search(pattern, markdown_text)
+    if match:
+        obsidian_link = match.group(1)
+        print(f"Obsidian link found: {obsidian_link}")
+        quoted_links.append(obsidian_link)
+quoted_links[0]
+# %%
+quoted_idxs = []
+for obs_link in quoted_links:
+    splitted = obs_link.split("/")
+    if splitted[0] == "tweet_attachments":
+        continue
+    quote_idx = splitted[0].split(" - ")[1]
+    quoted_idxs.append(quote_idx)
+q_to_process = []
+for q in quoted_idxs:
+    if q in tweet_idxs:
+        continue
+    else:
+        q_to_process.append(q)
+# %%
+prop_urls = []
+for qp in q_to_process:
+    prop_url = find_linked_tweets(qp)
+    prop_urls.append(prop_url)
+flat_prop_urls = [url for sublist in prop_urls for url in sublist]
+tweet_urls = [
+    x.replace("https://nitter.net", "https://twitter.com") for x in flat_prop_urls
+]
+# %%
+process_and_save_tweets(tweet_urls, "data/tweets_output/")
+
+# %%
+directory_path = "bookmarks"
+tweet_urls = []
+for file_path in glob.glob(os.path.join(directory_path, "*.txt")):
+    with open(file_path) as file:
+        for url in file.readlines():
+            url_idx = url.split("/")[-1].strip()
+            if url_idx in tweet_idxs:
+                continue
+            else:
+                url = url.strip()
+                if len(url.split("status")[1].split("/")) > 2:
+                    continue
+                tweet_urls.append((url, url_idx))
+
+
+# %%
+process_and_save_tweets([t[0] for t in tweet_urls], "data/tweets_output/")
+# %%
+tweet_urls = []
+with open("not_processed_log_20231216_1.txt") as file:
+    for url in file.readlines():
+        url_idx = url.split("/")[-1].strip()
+        if url_idx in tweet_idxs:
+            continue
+        else:
+            url = url.strip()
+            if len(url.split("status")[1].split("/")) > 2:
+                continue
+            tweet_urls.append((url, url_idx))
+
+# %%
+# process_and_save_tweets(set(tweet_urls), "data/tweets_output/")
+process_and_save_tweets([t[0] for t in tweet_urls], "data/tweets_output/")
+
+# %%
+with open("error_log_2023099.txt", "r") as file:
     tweet_urls = []
     for url in file.readlines():
         url = url.split("URL: ")[1].split("|")[0].strip()
         tweet_urls.append(url)
+# %%
 process_and_save_tweets(tweet_urls, "data/tweets_output/")
 
 # %%
