@@ -97,9 +97,19 @@ def generate_markdown(html_content, output_folder, tweet_link):
     tweet_id = og_link.split("/")[-1].split("#")[0]
     # Extract all timeline-items (tweets) in the thread
     timeline_items = soup.find_all("div", {"class": "timeline-item"})
-
+    if not timeline_items:
+        container_div = soup.find("div", {"class": "container"})
+        panel_container_div = container_div.find("div", {"class": "panel-container"})
+        print(panel_container_div.text)
+        if (
+            "Instance has been rate limited.Use another instance or try again later."
+            in panel_container_div.text
+        ):
+            raise ValueError("Rate limited")
+        raise ValueError("Tweet not found")
     # Determine if it's a thread by checking multiple tweets by the same author
     first_tweet = timeline_items[0]
+
     clean_date = (
         first_tweet.find("span", {"class": "tweet-date"})
         .a["title"]
@@ -117,9 +127,21 @@ date: "{clean_date}"
 
     tweets_to_include = [first_tweet]
     for timeline_item in timeline_items[1:]:
-        if timeline_item.text == "This tweet is unavailable":
+        handle = None  # Initialize handle variable
+
+        try:
+            if timeline_item.text == "This tweet is unavailable":
+                continue
+        except AttributeError:
+            print(timeline_item)
+            break
+
+        try:
+            handle = timeline_item.find("a", {"class": "username"}).text.strip()
+        except AttributeError as e:
+            print(f"Error: {e}")
             continue
-        handle = timeline_item.find("a", {"class": "username"}).text.strip()
+
         if handle == "@" + user_handle:
             tweets_to_include.append(timeline_item)
         else:
@@ -252,6 +274,7 @@ def process_and_save_tweets(tweets_links, output_dir):
         try:
             print(f"processing {tweet_link}")
             tweet_html = getting_source_code(tweet_link)
+
             markdown_content, quoted_tweet_link = generate_markdown(
                 tweet_html, output_directory, tweet_link
             )
@@ -329,9 +352,15 @@ def find_linked_tweets(tweet_id):
 import glob
 import os
 
-tweet_idxs = []
-for tweet_md in glob.glob(os.path.join("data/tweets_output", "*.md")):
-    tweet_idxs.append(tweet_md.split(" - ")[1].split(".")[0])
+
+def get_tweet_idxs():
+    tweet_idxs = []
+    for tweet_md in glob.glob(os.path.join("data/tweets_output", "*.md")):
+        tweet_idxs.append(tweet_md.split(" - ")[1].split(".")[0])
+    return tweet_idxs
+
+
+tweet_idxs = get_tweet_idxs()
 tweet_idxs[0]
 # %%
 quoted_links = []
@@ -376,7 +405,7 @@ tweet_urls = [
 process_and_save_tweets(tweet_urls, "data/tweets_output/")
 
 # %%
-directory_path = "bookmarks"
+directory_path = "bookmarks/old"
 tweet_urls = []
 for file_path in glob.glob(os.path.join(directory_path, "*.txt")):
     with open(file_path) as file:
@@ -395,7 +424,7 @@ for file_path in glob.glob(os.path.join(directory_path, "*.txt")):
 process_and_save_tweets([t[0] for t in tweet_urls], "data/tweets_output/")
 # %%
 tweet_urls = []
-with open("not_processed_log_20231216_1.txt") as file:
+with open("not_processed_log_20240222.txt") as file:
     for url in file.readlines():
         url_idx = url.split("/")[-1].strip()
         if url_idx in tweet_idxs:
@@ -411,38 +440,15 @@ with open("not_processed_log_20231216_1.txt") as file:
 process_and_save_tweets([t[0] for t in tweet_urls], "data/tweets_output/")
 
 # %%
-with open("error_log_2023099.txt", "r") as file:
+with open("error_log_20240222.txt", "r") as file:
     tweet_urls = []
     for url in file.readlines():
+        error_text = url.split("| Error: ")[1].strip()
         url = url.split("URL: ")[1].split("|")[0].strip()
+        if "Tweet not found" in error_text:
+            continue
         tweet_urls.append(url)
 # %%
 process_and_save_tweets(tweet_urls, "data/tweets_output/")
 
 # %%
-# with open("all_bookmarks_2023-09-22_08-30-10.txt", "r") as file:
-#     img_urls = set()
-#     for url in file.readlines():
-#         url = url.strip()
-#         if (
-#             len(url.split("status")[1].split("/")) > 2
-#             and url.split("status")[1].split("/")[-2] == "photo"
-#         ):
-#             img_urls.add(url.split("/photo")[0])
-# img_urls
-# process_and_save_tweets(img_urls, "data/tweets_output/")
-# # %%
-# urls = ["https://twitter.com/jeremyphoward/status/1642726620082606080"]
-# out_dir = "data/tweets_output/"
-# link = urls[0]
-# # process_and_save_tweets(urls, "data/tweets_output/")
-# html_content = getting_source_code(link, out_dir)
-# # %%
-# generate_markdown(html_content, out_dir, tweet_link=link)
-# %%
-# TODO
-# ensure only main tweet get the image BUT NOT the quote tweet
-# https://twitter.com/suchenzang/status/1694773240818979278
-# correct processed log
-
-# in generate markdown
